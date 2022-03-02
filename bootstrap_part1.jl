@@ -185,10 +185,7 @@ Here we assume that ``F_0`` is known and we can keep drawing random samples of s
 "
 
 # ╔═╡ 753d1353-69c9-4deb-a892-99a4f1fc130a
-begin
-		B=2000; # Number of B simulations
-		xb=zeros(N); # container for Bootstrap samples
-end
+B=2000; # Number of B simulations
 
 # ╔═╡ 148e22a9-41fc-4703-9925-f83328aa3a0a
 begin
@@ -212,14 +209,15 @@ function oracle(data::Vector{Float64},B::Int64,alpha::Float64=0.05)
 	xb=zeros(N)
 	mu_oracle=zeros(B); #container for the MC simulations results
 	T_oracle=zeros(B)
+
+	m = mean(LogNormal(0,1))
 	#drawing B samples and computing their mean
 	 
-	
 	for b=1:B
 	    Random.rand!(rng,LogNormal(0,1),xb);
 		mb,sb = mean(xb),std(xb)
 	    mu_oracle[b]=mb
-		T_oracle[b]= (mb-m)/sb
+		T_oracle[b]= (mb-m)/(sb/sqrt(N))
 	end
 
 	sort!(mu_oracle);
@@ -271,9 +269,10 @@ The above procedure sounds like we are trying to pull ourselves out of a pit pul
 begin
 	sb_empirical=zeros(N);
 	xb_empirical=zeros(B);
+	
 	indx=zeros(Int64,N);
 	for b=1:B
-	    Random.rand!(rng,DiscreteUniform(1,N),indx);
+		Random.rand!(rng,DiscreteUniform(1,N),indx);
 	    sb_empirical=data[indx];
 	    xb_empirical[b]=mean(sb_empirical);
 	end
@@ -282,19 +281,22 @@ end
 # ╔═╡ d1f66d3b-d745-4c62-8241-a5f432c186db
 function empirical(data::Vector{Float64},B::Int64,alpha::Float64=0.05)
 	N=size(data,1)
-	xb=zeros(N)
+	xb=zeros(N) #container for data draws
 	
 	m_data = mean(data);  # For centering!!!!
+	indx=zeros(Int64,N);
 	
 	mu_empirical=zeros(B); #container for the MC simulations results
 	T_empirical=zeros(B)
 	#drawing MC samples and computing their mean
 	
 	for b=1:B
-	    Random.rand!(rng,LogNormal(0,1),xb);
+		Random.rand!(rng,DiscreteUniform(1,N),indx);
+		xb = data[indx]
+	    #Random.rand!(rng,LogNormal(0,1),xb);
 		mb,sb = mean(xb),std(xb)
 	    mu_empirical[b]=mb
-		T_empirical[b]= (mb-m_data)/sb  # <--- centering here
+		T_empirical[b]= (mb-m_data)/(sb/sqrt(N))  # <--- centering here
 	end
 
 	sort!(mu_empirical);
@@ -366,7 +368,7 @@ function MLE_LogNormal(data::Vector{Float64})
 
 	m_MLE, se_MLE = mean(LogNormal(m_hat,s_hat)), sqrt(var(LogNormal(m_hat,s_hat)))
 
-	return m_MLE, se_MLE
+	return m_hat,s_hat,m_MLE, se_MLE
 end
 
 # ╔═╡ 9876b4f8-6763-4ab8-ae01-20bae49a215e
@@ -384,17 +386,17 @@ function parametric(data::Vector{Float64},B::Int64,alpha::Float64=0.05)
 	N=size(data,1)
 	xb=zeros(N)
 	
-	m_MLE, = MLE_LogNormal(data);  # For centering!!!!
+	m_hat,s_hat,m_MLE, = MLE_LogNormal(data);  # For centering!!!!
 	
 	mu_parametric=zeros(B); #container for the MC simulations results
 	T_parametric=zeros(B)
 	#drawing MC samples and computing their mean
 	
 	for b=1:B
-	    Random.rand!(rng,LogNormal(0,1),xb);
+	    Random.rand!(rng,LogNormal(m_hat,s_hat),xb);
 		mb,sb = mean(xb),std(xb)
 	    mu_parametric[b]=mb
-		T_parametric[b]= (mb-m_MLE)/sb  # <--- centering here
+		T_parametric[b]= (mb-m_MLE)/(sb/sqrt(N))  # <--- centering here
 	end
 
 	sort!(mu_parametric);
@@ -420,6 +422,9 @@ with_terminal() do
 	println("T: [ ",round5(T_parametric_l)," , ",round5(T_parametric_h)," ]")
 	
 end
+
+# ╔═╡ a5e08127-90d9-45dc-8faa-a2405a33dc06
+T_parametric_l < T_0 < T_parametric_h
 
 # ╔═╡ e6f2a50d-703c-42e7-9a5b-ada1f09a14d0
 begin
@@ -459,6 +464,47 @@ md"
 
 The above exercize implemented the Bootstrap and the Asymptotic tests for **One** sample. To test the validity and the performance of these methods we need to repeat the above for many times and see which of these tests has 5% rejection rate,
 "
+
+# ╔═╡ 8102fbbc-df8c-4d97-bd21-627c34f7ed07
+function rejectionRates(N,MC,B)
+	Rₐ, Rₒ, Rₑ, Rₚ = 0,0,0,0  # initiating the counters
+	for m=1:MC
+		# draw data
+		data, μₙ, σₙ = makeSample(N)
+		Tₙ = (μₙ - sqrt(exp(1)))/(σₙ/sqrt(N))
+		#Oracle bootstrap
+		ml,mh,Tl,Th = oracle(data,B)
+		Rₒ += (Tl < Tₙ <Th)
+		#Empirical bootstrap
+		ml,mh,Tl,Th = empirical(data,B)
+		Rₑ += (Tl < Tₙ < Th)
+		#Parametric bootstrap
+		ml,mh,Tl,Th = parametric(data,B)
+		Rₚ += (Tl < Tₙ < Th)
+		#Asymptotic test
+		Rₐ += (-1.96 < Tₙ < 1.96)
+	end
+	return [Rₐ, Rₒ, Rₑ, Rₚ]/MC
+end
+
+# ╔═╡ 0c90b073-6e46-48d9-aa4e-f8c4c45d1378
+begin
+	MC = 5000
+	Rₐ, Rₒ, Rₑ, Rₚ = rejectionRates(N,MC,B)
+end
+
+# ╔═╡ 6cb4a5e6-faa0-4d77-bee2-9d166343b225
+with_terminal() do
+	## Rejection rates:
+	
+	println("Prob(reject H0 | H0 is correct):")
+	println("--------------------------------")
+	println("Oracle Bootstrap:        ",round5(1 - Rₒ))
+	println("Empirical Bootstrap:     ",round5(1 - Rₑ))
+	println("Parametric Bootstrap:    ",round5(1 - Rₚ))
+	println("Asymptotic Distribution: ",round5(1 - Rₐ))
+	
+end
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
@@ -1483,7 +1529,7 @@ version = "0.9.1+5"
 # ╠═d1f66d3b-d745-4c62-8241-a5f432c186db
 # ╠═76b87501-2421-4143-a4d1-92dd54a47faf
 # ╠═ad7c0de6-4423-42f7-8bbf-02ca6e728056
-# ╠═ff4d9b2d-ffdd-40d0-bb20-f8374b59dc8d
+# ╟─ff4d9b2d-ffdd-40d0-bb20-f8374b59dc8d
 # ╠═2a776e34-e9e5-427c-a659-37ea8c91b3f6
 # ╠═6602689b-a74a-4f66-ab4e-b4f8be727385
 # ╟─4ba2df14-5961-401a-bf8a-395976afc0b8
@@ -1493,12 +1539,16 @@ version = "0.9.1+5"
 # ╠═4562e576-6646-425d-8dfb-603a0308a4f6
 # ╠═179391f3-ee1e-47c6-b43e-aa0e4b708215
 # ╠═6fd8f673-f5d6-4f03-b195-0f811a6cf88f
+# ╠═a5e08127-90d9-45dc-8faa-a2405a33dc06
 # ╠═e6f2a50d-703c-42e7-9a5b-ada1f09a14d0
 # ╟─22a16720-2da3-457e-91c9-a24f41b70745
 # ╠═0b599ced-d72c-4416-b3a5-9314107afc84
 # ╠═98c1a4c0-152d-42e8-b622-a5c0e57d1d6b
 # ╠═3cb89bf1-7a9c-4124-ad9e-3b7203270f70
 # ╠═156f0c46-e20d-4961-84a6-9aa3351e5522
-# ╠═afe21b88-e8c6-4fb9-ab12-737f0570dd39
+# ╟─afe21b88-e8c6-4fb9-ab12-737f0570dd39
+# ╠═8102fbbc-df8c-4d97-bd21-627c34f7ed07
+# ╠═0c90b073-6e46-48d9-aa4e-f8c4c45d1378
+# ╠═6cb4a5e6-faa0-4d77-bee2-9d166343b225
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002
